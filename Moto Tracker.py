@@ -6,7 +6,7 @@ from datetime import datetime
 st.title("Moto Audit Tracker Mapper")
 
 st.write("""
-          1. Export full month of Moto data
+          1. Export full month(s) of Moto data
           2. Drop the file in the below box, it should then give you the output file in your downloads
           3. Paste into the Moto Tracker
           4. Done.
