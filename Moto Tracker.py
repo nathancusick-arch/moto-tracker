@@ -19,7 +19,7 @@ st.title("Moto Audit Tracker Mapper")
 st.write(
         """
         1. Export full month(s) of ALL Moto data (EVERYTHING, INCLUDING incomplete audits)
-        Filters should look like "Client" = "Moto Hospitality Limited", "End Date - From" = "01/mm/yyyy" (with date set for whatever month(s) you want to export)
+        \n\nFilters should look like "Client" = "Moto Hospitality Limited", "End Date - From" = "01/mm/yyyy" (with date set for whatever month(s) you want to export)
         2. Drop the file in the below box, it should then give you the output file in your downloads
         3. Paste into the Moto Tracker
         4. Done.
