@@ -66,6 +66,18 @@ def _token_group(tok: str) -> str:
         return "random"
     return "other"
 
+def _fallback_token_from_schedule_type(order_schedule_type_norm: str) -> str:
+    """Fallback token classification when 'tokens' is blank."""
+    ost = (order_schedule_type_norm or "").strip().lower()
+    if ost == "scheduled_monthly":
+        return "monthly"
+    if ost == "scheduled_off_monthly":
+        return "random"
+    if ost == "weekly":
+        return "weekly"
+    return ""
+
+
 def _argb(rgb6: str) -> str:
     rgb6 = (rgb6 or "000000").replace("#", "").upper()
     if len(rgb6) != 6:
@@ -139,9 +151,12 @@ if uploaded_file is not None:
 
     # Normalized fields
     df["PRIMARY_RESULT"] = df.get("primary_result").astype(str).str.upper()
-    df["token_class"] = df.get("tokens").astype(str).str.strip().str.lower()
+    # Token classification. Prefer `tokens`; if blank, fall back to order_schedule_type.
+    df["token_class"] = df.get("tokens").fillna("").astype(str).str.strip().str.lower()
+    blank_tok = df["token_class"].eq("") | df["token_class"].eq("nan")
+    if blank_tok.any():
+        df.loc[blank_tok, "token_class"] = df.loc[blank_tok, "order_schedule_type_norm"].apply(_fallback_token_from_schedule_type)
     df["token_group"] = df["token_class"].apply(_token_group)
-
     # Ensure order_schedule_type exists
     if "order_schedule_type" not in df.columns:
         df["order_schedule_type"] = ""
