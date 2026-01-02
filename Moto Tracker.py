@@ -2,20 +2,30 @@ import streamlit as st
 import pandas as pd
 import io
 from datetime import datetime
+from openpyxl import Workbook
+from openpyxl.styles.colors import Color
+
+# Rich text support
+try:
+    from openpyxl.cell.rich_text import CellRichText, TextBlock, InlineFont
+    RICH_TEXT_AVAILABLE = True
+except Exception:
+    RICH_TEXT_AVAILABLE = False
 
 st.title("Moto Audit Tracker Mapper")
 
-st.write("""
-          1. Export full month(s) of ALL Moto data (EVERYTHING, INCLUDING incomplete audits)
-          2. Drop the file in the below box, it should then give you the output file in your downloads
-          3. Paste into the Moto Tracker
-          4. Done.
-          """)
+st.write(
+    """
+1. Export full month(s) of ALL Moto data (EVERYTHING, INCLUDING incomplete audits)
+2. Drop the file in the below box, it should then give you the output file in your downloads
+3. Paste into the Moto Tracker
+4. Done.
+"""
+)
 
 # ---------------------------------------------------------
 # EXACT SITE ORDER FROM TRACKER
 # ---------------------------------------------------------
-
 TRACKER_SITE_ORDER = [
     "SITE32718", "SITE32719", "SITE32720", "SITE32721", "SITE32722",
     "SITE32723", "SITE32724", "SITE32725", "SITE32727", "SITE32728",
@@ -30,11 +40,9 @@ TRACKER_SITE_ORDER = [
     "SITE32772", "SITE32773", "SITE48318", "SITE306813",
 ]
 
-
 # ---------------------------------------------------------
 # HELPER FUNCTIONS
 # ---------------------------------------------------------
-
 def day_ordinal(ts: pd.Timestamp) -> str:
     d = ts.day
     if 11 <= d <= 13:
@@ -43,32 +51,53 @@ def day_ordinal(ts: pd.Timestamp) -> str:
         suffix = {1: "ST", 2: "ND", 3: "RD"}.get(d % 10, "TH")
     return f"{d}{suffix}"
 
-
 def _month_base_label(ts: pd.Timestamp) -> str:
     month_name = ts.strftime("%B")
     year_short = ts.strftime("%y")
     return f"{month_name} '{year_short}"
 
-
 def _token_group(tok: str) -> str:
+    # tok is normalized lower-case
     if tok in {"monthly", "weekly"}:
         return "mw"
     if tok == "random":
         return "random"
     return "other"
 
+def _argb(rgb6: str) -> str:
+    rgb6 = (rgb6 or "000000").replace("#", "").upper()
+    if len(rgb6) != 6:
+        rgb6 = "000000"
+    return "FF" + rgb6
+
+def segment_color(row) -> str:
+    """Return hex RGB (no #) for the audit segment, per rules."""
+    if str(row.get("order_schedule_type_norm", "")).strip().lower() == "emergency":
+        return "00B050"  # green (overrides)
+    tok = str(row.get("token_class", "")).strip().lower()
+    if tok == "weekly":
+        return "FF0000"  # red
+    if tok == "random":
+        return "0070C0"  # blue
+    return "000000"      # black
+
+def _idxmin_dt(series: pd.Series) -> int:
+    """Pick idx of earliest datetime, handling all-NaT."""
+    s = pd.to_datetime(series, errors="coerce")
+    if s.notna().any():
+        return s.idxmin()
+    return s.index[0]
 
 # ---------------------------------------------------------
 # STREAMLIT FILE UPLOADER
 # ---------------------------------------------------------
-
 uploaded_file = st.file_uploader("Upload audits_basic_data_export.csv", type=["csv"])
 
 if uploaded_file is not None:
     # Load CSV
     df = pd.read_csv(uploaded_file)
 
-    # Keep everything except deleted
+    # Normalize status; remove only deleted
     df["status_norm"] = df.get("status").astype(str).str.strip().str.lower()
     df = df[df["status_norm"] != "deleted"].copy()
 
@@ -80,7 +109,6 @@ if uploaded_file is not None:
     # - Non-approved: month from start_date
     df["date_of_visit_dt"] = pd.to_datetime(df.get("date_of_visit"), dayfirst=True, errors="coerce")
     df["start_date_dt"] = pd.to_datetime(df.get("start_date"), dayfirst=True, errors="coerce")
-
     df["month_dt"] = df["date_of_visit_dt"].where(df["is_approved"], df["start_date_dt"])
     df = df[df["month_dt"].notna()].copy()
 
@@ -103,8 +131,7 @@ if uploaded_file is not None:
     df["col_month"] = df["month_dt"].dt.month
     df["month_base"] = df["month_dt"].apply(_month_base_label)
 
-    # Sort so "earliest" approved uses actual visit datetime
-    # Approved priority is enforced in the base-selection logic below
+    # Sort to make selection deterministic; approved priority is enforced below
     df = df.sort_values(
         ["site_internal_id", "col_year", "col_month", "is_approved", "visit_dt", "month_dt"],
         ascending=[True, True, True, False, True, True],
@@ -112,28 +139,8 @@ if uploaded_file is not None:
 
     # ---------------------------------------------------------
     # Assign base vs extra per site+month
-    #
-    # Rules (as defined):
-    # - Base column contains exactly 1 audit per site+month.
-    # - Monthly/Weekly audits are preferred for base; approved takes priority over non-approved.
-    # - Emergency audits go to Extra unless it is the ONLY Monthly/Weekly audit that month
-    #   (or if multiple and all are emergency, earliest emergency becomes base).
-    # - Random audits go to Extra, EXCEPT if there are no Monthly/Weekly audits that month for that site
-    #   (then earliest Random goes to base). Approved Random takes priority over non-approved Random.
-    #
-    # - Cell text:
-    #   - Approved: "RESULT - DAY"
-    #   - Non-approved: "TBC"
     # ---------------------------------------------------------
     df["is_base"] = False
-
-    def _idxmin_dt(series: pd.Series) -> int:
-        """Pick idx of earliest datetime, handling all-NaT."""
-        s = pd.to_datetime(series, errors="coerce")
-        if s.notna().any():
-            return s.idxmin()
-        # Fallback deterministic: first index
-        return s.index[0]
 
     for (site, y, mth), g in df.groupby(["site_internal_id", "col_year", "col_month"], sort=False):
         base_idx = None
@@ -157,7 +164,7 @@ if uploaded_file is not None:
                     base_idx = _idxmin_dt(g_mw_approved["visit_dt"])
 
         elif len(g_mw_nonapproved) > 0:
-            # No approved MW: choose among non-approved MW
+            # No approved MW: choose among non-approved MW (start_date only)
             if len(g_mw_nonapproved) == 1:
                 base_idx = _idxmin_dt(g_mw_nonapproved["month_dt"])
             else:
@@ -168,7 +175,7 @@ if uploaded_file is not None:
                     base_idx = _idxmin_dt(g_mw_nonapproved["month_dt"])
 
         else:
-            # 2) No Monthly/Weekly: earliest Random becomes base
+            # 2) No Monthly/Weekly: earliest Random becomes base (approved preferred)
             g_rand = g[g["token_group"] == "random"]
             g_rand_approved = g_rand[g_rand["is_approved"]]
             g_rand_nonapproved = g_rand[~g_rand["is_approved"]]
@@ -185,7 +192,7 @@ if uploaded_file is not None:
 
     df["tracker_column"] = df["month_base"] + df["is_base"].map(lambda b: "" if b else " Extra")
 
-    # Chronological order for merging output strings
+    # Chronological order for writing output strings
     df["sort_dt"] = df["visit_dt"].where(df["is_approved"], df["month_dt"])
     df = df.sort_values(["site_internal_id", "col_year", "col_month", "tracker_column", "sort_dt"])
 
@@ -205,141 +212,123 @@ if uploaded_file is not None:
         final_columns.append(base)
         final_columns.append(base + " Extra")
 
-# ---------------------------------------------------------
-# Build output tables:
-#  - out_text: strings for on-screen preview
-#  - out_rich: per-cell list of segments [{'text':..., 'rgb':...}]
-# ---------------------------------------------------------
+    # ---------------------------------------------------------
+    # Build output tables:
+    #  - out_text: strings for on-screen preview
+    #  - out_rich: per-cell list of segments [{'text':..., 'rgb':...}]
+    # ---------------------------------------------------------
+    out_text = pd.DataFrame(index=TRACKER_SITE_ORDER, columns=final_columns)
+    out_text.index.name = "Site Code"
+    out_rich = pd.DataFrame(index=TRACKER_SITE_ORDER, columns=final_columns)
+    out_rich.index.name = "Site Code"
 
-def segment_color(row) -> str:
-    """Return hex RGB (no #) for the audit segment, per rules."""
-    if str(row.get("order_schedule_type_norm", "")).strip().lower() == "emergency":
-        return "00B050"  # green
-    tok = str(row.get("token_norm", "")).strip().lower()
-    if tok == "weekly":
-        return "FF0000"  # red
-    if tok == "random":
-        return "0070C0"  # blue
-    return "000000"      # black
+    for _, row in df.iterrows():
+        site = str(row.get("site_internal_id"))
+        col = row.get("tracker_column")
 
-out_text = pd.DataFrame(index=TRACKER_SITE_ORDER, columns=final_columns)
-out_text.index.name = "Site Code"
-out_rich = pd.DataFrame(index=TRACKER_SITE_ORDER, columns=final_columns)
-out_rich.index.name = "Site Code"
+        if site not in out_text.index or col not in out_text.columns:
+            continue
 
-# Fill table
-for _, row in df.iterrows():
-    site = str(row.get("site_internal_id"))
-    col = row.get("tracker_column")
+        rgb = segment_color(row)
 
-    if site not in out_text.index or col not in out_text.columns:
-        continue
-
-    rgb = segment_color(row)
-
-    if row.get("is_approved"):
-        # Approved: show result + visit day
-        if pd.isna(row.get("date_of_visit_dt")):
-            val = str(row.get("PRIMARY_RESULT", "")).strip() or "TBC"
+        if bool(row.get("is_approved")):
+            # Approved: show result + visit day
+            if pd.isna(row.get("date_of_visit_dt")):
+                val = str(row.get("PRIMARY_RESULT", "")).strip() or "TBC"
+            else:
+                day_str = day_ordinal(row["date_of_visit_dt"])
+                val = f"{row['PRIMARY_RESULT']} - {day_str}"
         else:
-            day_str = day_ordinal(row["date_of_visit_dt"])
-            val = f"{row['PRIMARY_RESULT']} - {day_str}"
-    else:
-        # Non-approved: always TBC
-        val = "TBC"
+            # Non-approved: always TBC
+            val = "TBC"
 
-    # Append to rich segments
-    existing_segments = out_rich.loc[site, col]
-    if isinstance(existing_segments, list):
-        existing_segments.append({"text": val, "rgb": rgb})
-        out_rich.loc[site, col] = existing_segments
-    elif pd.isna(existing_segments) or existing_segments is None or existing_segments == "":
-        out_rich.loc[site, col] = [{"text": val, "rgb": rgb}]
-    else:
-        # Shouldn't happen, but keep safe
-        out_rich.loc[site, col] = [{"text": str(existing_segments), "rgb": "000000"}, {"text": val, "rgb": rgb}]
+        # Append rich segments (keep duplicates like 'TBC, TBC')
+        existing_segments = out_rich.loc[site, col]
+        if isinstance(existing_segments, list):
+            existing_segments.append({"text": val, "rgb": rgb})
+            out_rich.loc[site, col] = existing_segments
+        elif pd.isna(existing_segments) or existing_segments in (None, "", []):
+            out_rich.loc[site, col] = [{"text": val, "rgb": rgb}]
+        else:
+            out_rich.loc[site, col] = [{"text": str(existing_segments), "rgb": "000000"}, {"text": val, "rgb": rgb}]
 
-    # Append to preview text
-    existing = out_text.loc[site, col]
-    out_text.loc[site, col] = val if pd.isna(existing) or existing == "" else f"{existing}, {val}"
+        # Append preview text
+        existing = out_text.loc[site, col]
+        out_text.loc[site, col] = val if pd.isna(existing) or existing == "" else f"{existing}, {val}"
 
-# Fill N/A for past months (months before current calendar month)
+    # Fill N/A for past months (months before current calendar month)
     today = datetime.today()
     current_y = int(today.strftime("%y"))
     current_m = int(today.strftime("%m"))
 
-    
-for col in out_text.columns:
-    parts = col.replace(" Extra", "").split(" '")
-    month_name = parts[0]
-    year_short = int(parts[1])
-    month_num = pd.to_datetime(month_name, format="%B").month
+    for col in out_text.columns:
+        parts = col.replace(" Extra", "").split(" '")
+        month_name = parts[0]
+        year_short = int(parts[1])
+        month_num = pd.to_datetime(month_name, format="%B").month
 
-    # Month is before current → fill N/A
-    if (year_short < current_y) or (year_short == current_y and month_num < current_m):
-        # Fill preview text
-        out_text[col] = out_text[col].fillna("N/A")
+        if (year_short < current_y) or (year_short == current_y and month_num < current_m):
+            out_text[col] = out_text[col].fillna("N/A")
+            for site in out_rich.index:
+                if pd.isna(out_rich.loc[site, col]) or out_rich.loc[site, col] in (None, "", []):
+                    out_rich.loc[site, col] = "N/A"
 
-        # Fill rich segments: blanks become 'N/A' sentinel
-        for site in out_rich.index:
-            if pd.isna(out_rich.loc[site, col]) or out_rich.loc[site, col] in (None, "", []):
-                out_rich.loc[site, col] = "N/A"
-
-# Preview
+    # Preview
     st.subheader("Preview of Output")
     st.dataframe(out_text)
 
+    # ---------------------------------------------------------
+    # Prepare XLSX download with rich-text colouring
+    # ---------------------------------------------------------
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Moto Tracker Results"
 
-# Prepare XLSX download with rich-text colouring
-from openpyxl import Workbook
-from openpyxl.cell.rich_text import CellRichText, TextBlock, InlineFont
-from openpyxl.styles.colors import Color
-
-def _argb(rgb6: str) -> str:
-    rgb6 = (rgb6 or "000000").replace("#", "").upper()
-    if len(rgb6) != 6:
-        rgb6 = "000000"
-    return "FF" + rgb6
-
-wb = Workbook()
-ws = wb.active
-ws.title = "Moto Tracker Results"
-
-# Header row
-ws.cell(row=1, column=1, value="Site Code")
-for j, col in enumerate(out_text.columns, start=2):
-    ws.cell(row=1, column=j, value=col)
-
-# Data rows
-for i, site in enumerate(out_text.index, start=2):
-    ws.cell(row=i, column=1, value=site)
-
+    # Header row
+    ws.cell(row=1, column=1, value="Site Code")
     for j, col in enumerate(out_text.columns, start=2):
-        cell = ws.cell(row=i, column=j)
-        rich_val = out_rich.loc[site, col]
+        ws.cell(row=1, column=j, value=col)
 
-        if rich_val == "N/A":
-            cell.value = "N/A"
-        elif isinstance(rich_val, list) and len(rich_val) > 0:
-            rt = CellRichText()
-            for k, seg in enumerate(rich_val):
-                seg_text = str(seg.get("text", ""))
-                seg_rgb = str(seg.get("rgb", "000000"))
-                rt.append(TextBlock(InlineFont(color=Color(rgb=_argb(seg_rgb))), seg_text))
-                if k < len(rich_val) - 1:
-                    rt.append(TextBlock(InlineFont(color=Color(rgb=_argb("000000"))), ", "))
-            cell.value = rt
-        else:
-            # Leave blank
-            pass
+    # Data rows
+    for i, site in enumerate(out_text.index, start=2):
+        ws.cell(row=i, column=1, value=site)
 
-xlsx_buffer = io.BytesIO()
-wb.save(xlsx_buffer)
-xlsx_buffer.seek(0)
+        for j, col in enumerate(out_text.columns, start=2):
+            cell = ws.cell(row=i, column=j)
+            rich_val = out_rich.loc[site, col]
 
-st.download_button(
-    label="Download Moto Tracker Results",
-    data=xlsx_buffer,
-    file_name="Moto Tracker Results.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+            if rich_val == "N/A":
+                cell.value = "N/A"
+            elif isinstance(rich_val, list) and len(rich_val) > 0:
+                if RICH_TEXT_AVAILABLE:
+                    rt = CellRichText()
+                    for k, seg in enumerate(rich_val):
+                        seg_text = str(seg.get("text", ""))
+                        seg_rgb = str(seg.get("rgb", "000000"))
+                        rt.append(TextBlock(InlineFont(color=Color(rgb=_argb(seg_rgb))), seg_text))
+                        if k < len(rich_val) - 1:
+                            rt.append(TextBlock(InlineFont(color=Color(rgb=_argb("000000"))), ", "))
+                    cell.value = rt
+                else:
+                    # Fallback: no rich text support, write plain string
+                    cell.value = ", ".join(str(seg.get("text", "")) for seg in rich_val)
+            else:
+                # leave blank
+                pass
+
+    xlsx_buffer = io.BytesIO()
+    wb.save(xlsx_buffer)
+    xlsx_buffer.seek(0)
+
+    if not RICH_TEXT_AVAILABLE:
+        st.warning(
+            "Rich text formatting isn't available in this environment (openpyxl rich_text missing). "
+            "The download will be plain text."
+        )
+
+    st.download_button(
+        label="Download Moto Tracker Results",
+        data=xlsx_buffer,
+        file_name="Moto Tracker Results.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
