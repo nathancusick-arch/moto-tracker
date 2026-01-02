@@ -175,13 +175,21 @@ if uploaded_file is not None:
                 # Only one approved MW: becomes base even if emergency
                 base_idx = _idxmin_dt(g_mw_approved["visit_dt"])
             else:
-                # Multiple approved MW: prefer earliest non-emergency
+                # Multiple approved MW: prefer earliest non-emergency, but MONTHLY always takes priority over WEEKLY
                 g_non_em = g_mw_approved[g_mw_approved["order_schedule_type_norm"] != "emergency"]
                 if len(g_non_em) > 0:
-                    base_idx = _idxmin_dt(g_non_em["visit_dt"])
+                    g_monthly = g_non_em[g_non_em["token_class"] == "monthly"]
+                    if len(g_monthly) > 0:
+                        base_idx = _idxmin_dt(g_monthly["visit_dt"])
+                    else:
+                        base_idx = _idxmin_dt(g_non_em["visit_dt"])
                 else:
-                    # All approved MW are emergency: earliest emergency becomes base
-                    base_idx = _idxmin_dt(g_mw_approved["visit_dt"])
+                    # All approved MW are emergency: earliest emergency becomes base (MONTHLY preferred if present)
+                    g_monthly_em = g_mw_approved[g_mw_approved["token_class"] == "monthly"]
+                    if len(g_monthly_em) > 0:
+                        base_idx = _idxmin_dt(g_monthly_em["visit_dt"])
+                    else:
+                        base_idx = _idxmin_dt(g_mw_approved["visit_dt"])
 
         elif len(g_mw_nonapproved) > 0:
             # No approved MW: choose among non-approved MW (start_date only)
@@ -190,9 +198,18 @@ if uploaded_file is not None:
             else:
                 g_non_em = g_mw_nonapproved[g_mw_nonapproved["order_schedule_type_norm"] != "emergency"]
                 if len(g_non_em) > 0:
-                    base_idx = _idxmin_dt(g_non_em["month_dt"])
+                    g_monthly = g_non_em[g_non_em["token_class"] == "monthly"]
+                    if len(g_monthly) > 0:
+                        base_idx = _idxmin_dt(g_monthly["month_dt"])
+                    else:
+                        base_idx = _idxmin_dt(g_non_em["month_dt"])
                 else:
-                    base_idx = _idxmin_dt(g_mw_nonapproved["month_dt"])
+                    # All non-approved MW are emergency: earliest emergency becomes base (MONTHLY preferred if present)
+                    g_monthly_em = g_mw_nonapproved[g_mw_nonapproved["token_class"] == "monthly"]
+                    if len(g_monthly_em) > 0:
+                        base_idx = _idxmin_dt(g_monthly_em["month_dt"])
+                    else:
+                        base_idx = _idxmin_dt(g_mw_nonapproved["month_dt"])
 
         else:
             # 2) No Monthly/Weekly: earliest Random becomes base (approved preferred)
