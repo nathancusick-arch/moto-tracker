@@ -142,7 +142,29 @@ if uploaded_file is not None:
     # - Non-approved: month from start_date
     df["date_of_visit_dt"] = pd.to_datetime(df.get("date_of_visit"), dayfirst=True, errors="coerce")
     df["start_date_dt"] = pd.to_datetime(df.get("start_date"), dayfirst=True, errors="coerce")
+    df["end_date_dt"] = pd.to_datetime(df.get("end_date"), dayfirst=True, errors="coerce")
+
+    # Month assignment:
+    # - Approved: month from date_of_visit
+    # - Non-approved: month from start_date, BUT if the current month is later than start_date's month,
+    #   and end_date is in a different month, use end_date's month instead.
     df["month_dt"] = df["date_of_visit_dt"].where(df["is_approved"], df["start_date_dt"])
+
+    # Apply the non-approved end_date override rule
+    today = pd.Timestamp.today().normalize()
+    cur_ym = today.year * 12 + today.month
+    non_app_mask = ~df["is_approved"]
+    start_ok = df["start_date_dt"].notna()
+    end_ok = df["end_date_dt"].notna()
+    start_ym = df["start_date_dt"].dt.year * 12 + df["start_date_dt"].dt.month
+    end_ym = df["end_date_dt"].dt.year * 12 + df["end_date_dt"].dt.month
+    # current month later than start month
+    later_than_start = cur_ym > start_ym
+    # use end_date only if it is a different month
+    end_diff_month = end_ym != start_ym
+    use_end = non_app_mask & start_ok & end_ok & later_than_start & end_diff_month
+    df.loc[use_end, "month_dt"] = df.loc[use_end, "end_date_dt"]
+
     df = df[df["month_dt"].notna()].copy()
 
     # Parse time_of_visit for approved tie-breaks
