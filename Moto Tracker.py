@@ -326,23 +326,40 @@ if uploaded_file is not None:
             if rich_val == "N/A":
                 cell.value = "N/A"
                 cell.alignment = Alignment(vertical="center")
+                cell.font = Font(name="Arial", size=10)
             elif isinstance(rich_val, list) and len(rich_val) > 0:
                 if RICH_TEXT_AVAILABLE:
                     rt = CellRichText()
                     for k, seg in enumerate(rich_val):
                         seg_text = str(seg.get("text", ""))
                         seg_rgb = str(seg.get("rgb", "000000"))
-                        rt.append(TextBlock(InlineFont(name="Arial", size=10, color=Color(rgb=_argb(seg_rgb))), seg_text))
+                        rt.append(
+                            TextBlock(
+                                InlineFont(name="Arial", size=10, color=Color(rgb=_argb(seg_rgb))),
+                                seg_text,
+                            )
+                        )
                         if k < len(rich_val) - 1:
-                            rt.append(TextBlock(InlineFont(name="Arial", size=10, color=Color(rgb=_argb("000000"))), ", "))
+                            rt.append(
+                                TextBlock(
+                                    InlineFont(name="Arial", size=10, color=Color(rgb=_argb("000000"))),
+                                    ", ",
+                                )
+                            )
                     cell.value = rt
-                cell.alignment = Alignment(vertical="center")
                 else:
                     # Fallback: no rich text support, write plain string
                     cell.value = ", ".join(str(seg.get("text", "")) for seg in rich_val)
+
+                # Alignment applies regardless of rich-text support
                 cell.alignment = Alignment(vertical="center")
+                # Font applies to non-rich-text cells
+                cell.font = Font(name="Arial", size=10)
+
             else:
                 # leave blank
+                cell.alignment = Alignment(vertical="center")
+                cell.font = Font(name="Arial", size=10)
                 pass
 
     xlsx_buffer = io.BytesIO()
