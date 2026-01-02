@@ -346,17 +346,17 @@ if uploaded_file is not None:
     # Header row
     c0 = ws.cell(row=1, column=1, value="Site Code")
     c0.font = Font(name="Arial", size=10)
-    c0.alignment = Alignment(horizontal="center", vertical="center")
+    c0.alignment = Alignment(horizontal="center")
     for j, col in enumerate(out_text.columns, start=2):
         cj = ws.cell(row=1, column=j, value=col)
         cj.font = Font(name="Arial", size=10)
-        cj.alignment = Alignment(horizontal="center", vertical="center")
+        cj.alignment = Alignment(horizontal="center")
 
     # Data rows
     for i, site in enumerate(out_text.index, start=2):
         c_site = ws.cell(row=i, column=1, value=site)
         c_site.font = Font(name="Arial", size=10)
-        c_site.alignment = Alignment(horizontal="center", vertical="center")
+        c_site.alignment = Alignment(horizontal="center")
 
         for j, col in enumerate(out_text.columns, start=2):
             cell = ws.cell(row=i, column=j)
@@ -364,7 +364,7 @@ if uploaded_file is not None:
 
             if rich_val == "N/A":
                 cell.value = "N/A"
-                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.alignment = Alignment(horizontal="center")
                 cell.font = Font(name="Arial", size=10)
             elif isinstance(rich_val, list) and len(rich_val) > 0:
                 if RICH_TEXT_AVAILABLE:
@@ -391,13 +391,13 @@ if uploaded_file is not None:
                     cell.value = ", ".join(str(seg.get("text", "")) for seg in rich_val)
 
                 # Alignment applies regardless of rich-text support
-                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.alignment = Alignment(horizontal="center")
                 # Font applies to non-rich-text cells
                 cell.font = Font(name="Arial", size=10)
 
             else:
                 # leave blank
-                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.alignment = Alignment(horizontal="center")
                 cell.font = Font(name="Arial", size=10)
                 pass
     # Apply an outline border around each month block (base + extra columns),
