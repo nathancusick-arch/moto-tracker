@@ -15,12 +15,12 @@ except Exception:
 st.title("Moto Audit Tracker Mapper")
 
 st.write(
-    """
-1. Export full month(s) of ALL Moto data (EVERYTHING, INCLUDING incomplete audits)
-2. Drop the file in the below box, it should then give you the output file in your downloads
-3. Paste into the Moto Tracker
-4. Done.
-"""
+        """
+        1. Export full month(s) of ALL Moto data (EVERYTHING, INCLUDING incomplete audits)
+        2. Drop the file in the below box, it should then give you the output file in your downloads
+        3. Paste into the Moto Tracker
+        4. Done.
+        """
 )
 
 # ---------------------------------------------------------
