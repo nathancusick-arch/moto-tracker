@@ -150,18 +150,22 @@ if uploaded_file is not None:
 
     # Normalized fields
     df["PRIMARY_RESULT"] = df.get("primary_result").astype(str).str.upper()
-    # Token classification. Prefer `tokens`; if blank, fall back to order_schedule_type.
-    df["token_class"] = df.get("tokens").fillna("").astype(str).str.strip().str.lower()
-    blank_tok = df["token_class"].eq("") | df["token_class"].eq("nan")
-    if blank_tok.any():
-        df.loc[blank_tok, "token_class"] = df.loc[blank_tok, "order_schedule_type_norm"].apply(_fallback_token_from_schedule_type)
-    df["token_group"] = df["token_class"].apply(_token_group)
-    # Ensure order_schedule_type exists
+
+    # Ensure order_schedule_type exists (needed for emergency logic + token fallback)
     if "order_schedule_type" not in df.columns:
         df["order_schedule_type"] = ""
     df["order_schedule_type_norm"] = df["order_schedule_type"].fillna("").astype(str).str.strip().str.lower()
 
-    # Grouping keys by month
+    # Token classification. Prefer `tokens`; if blank, fall back to order_schedule_type.
+    df["token_class"] = df.get("tokens").fillna("").astype(str).str.strip().str.lower()
+    blank_tok = df["token_class"].eq("") | df["token_class"].eq("nan")
+    if blank_tok.any():
+        df.loc[blank_tok, "token_class"] = df.loc[blank_tok, "order_schedule_type_norm"].apply(
+            _fallback_token_from_schedule_type
+        )
+    df["token_group"] = df["token_class"].apply(_token_group)
+
+# Grouping keys by month
     df["col_year"] = df["month_dt"].dt.year
     df["col_month"] = df["month_dt"].dt.month
     df["month_base"] = df["month_dt"].apply(_month_base_label)
@@ -355,7 +359,6 @@ if uploaded_file is not None:
             vertical=b.vertical,
             horizontal=b.horizontal,
         )
-
 
     # Header row
     c0 = ws.cell(row=1, column=1, value="Site Code")
