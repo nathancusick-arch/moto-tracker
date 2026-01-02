@@ -5,6 +5,7 @@ from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles.colors import Color
 from openpyxl.styles import Alignment, Font
+from openpyxl.styles.borders import Border, Side
 
 # Rich text support
 try:
@@ -321,6 +322,27 @@ if uploaded_file is not None:
     ws = wb.active
     ws.title = "Moto Tracker Results"
 
+    # ---------------------------------------------------------
+    # Border styling (month outline)
+    # ---------------------------------------------------------
+    MED_SIDE = Side(style="medium")
+
+    def _with_border(cell_obj, left=None, right=None, top=None, bottom=None):
+        """Return a Border based on the cell's existing border, overriding provided sides."""
+        b = cell_obj.border or Border()
+        return Border(
+            left=left if left is not None else b.left,
+            right=right if right is not None else b.right,
+            top=top if top is not None else b.top,
+            bottom=bottom if bottom is not None else b.bottom,
+            diagonal=b.diagonal,
+            diagonal_direction=b.diagonal_direction,
+            outline=b.outline,
+            vertical=b.vertical,
+            horizontal=b.horizontal,
+        )
+
+
     # Header row
     c0 = ws.cell(row=1, column=1, value="Site Code")
     c0.font = Font(name="Arial", size=10)
@@ -378,6 +400,45 @@ if uploaded_file is not None:
                 cell.alignment = Alignment(horizontal="center")
                 cell.font = Font(name="Arial", size=10)
                 pass
+
+
+    # Apply an outline border around each month block (base + extra columns)
+    # Month columns start at Excel column 2 (because col 1 is Site Code)
+    first_month_col = 2
+    n_cols = len(out_text.columns)
+    last_row = 1 + len(out_text.index)  # header + data rows
+
+    # out_text.columns are [<month>, <month Extra>, <next month>, ...]
+    for month_i in range(0, n_cols, 2):
+        base_col = first_month_col + month_i
+        extra_col = base_col + 1
+
+        for r in range(1, last_row + 1):
+            # Left edge on base column
+            c_base = ws.cell(row=r, column=base_col)
+            c_base.border = _with_border(c_base, left=MED_SIDE)
+
+            # Right edge on extra column
+            c_extra = ws.cell(row=r, column=extra_col)
+            c_extra.border = _with_border(c_extra, right=MED_SIDE)
+
+        # Top edge (header row) across both columns
+        for c in (base_col, extra_col):
+            cell_top = ws.cell(row=1, column=c)
+            cell_top.border = _with_border(cell_top, top=MED_SIDE)
+
+        # Bottom edge (last data row) across both columns
+        for c in (base_col, extra_col):
+            cell_bot = ws.cell(row=last_row, column=c)
+            cell_bot.border = _with_border(cell_bot, bottom=MED_SIDE)
+
+    # Also put a medium outline around the Site Code column to match the table boundary
+    for r in range(1, last_row + 1):
+        c_site = ws.cell(row=r, column=1)
+        c_site.border = _with_border(c_site, left=MED_SIDE, right=MED_SIDE)
+    ws.cell(row=1, column=1).border = _with_border(ws.cell(row=1, column=1), top=MED_SIDE)
+    ws.cell(row=last_row, column=1).border = _with_border(ws.cell(row=last_row, column=1), bottom=MED_SIDE)
+
 
     xlsx_buffer = io.BytesIO()
     wb.save(xlsx_buffer)
