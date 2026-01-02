@@ -63,23 +63,67 @@ if uploaded_file is not None:
     # Load CSV
     df = pd.read_csv(uploaded_file)
 
+    # Only include completed audits
+    df["status_norm"] = df.get("status").astype(str).str.strip().str.lower()
+    df = df[df["status_norm"] == "approved"].copy()
+
     # UK dd/mm/yyyy
     df["date_of_visit"] = pd.to_datetime(df["date_of_visit"], dayfirst=True, errors="coerce")
     df = df[df["date_of_visit"].notna()].copy()
 
+    # Parse time_of_visit for tie-breaks (missing times treated as 00:00:00)
+    df["time_of_visit_td"] = pd.to_timedelta(df.get("time_of_visit"), errors="coerce").fillna(pd.Timedelta(0))
+    df["visit_dt"] = df["date_of_visit"] + df["time_of_visit_td"]
+
     df["PRIMARY_RESULT"] = df["primary_result"].astype(str).str.upper()
     df["token_class"] = df["tokens"].astype(str).str.strip().str.lower()
 
-    # Determine exact column headers
-    df["tracker_column"] = df.apply(
-        lambda r: tracker_col_from_date(r["date_of_visit"], r["token_class"]),
-        axis=1
-    )
+    # Decide which tracker column each visit goes into:
+    # - Base column contains exactly 1 visit per site+month: the earliest approved Monthly/Weekly audit
+    # - All other approved Monthly/Weekly go to Extra
+    # - Random audits go to Extra, EXCEPT if there are no Monthly/Weekly that month for that site (then earliest Random goes to base)
+    df["col_year"] = df["date_of_visit"].dt.year
+    df["col_month"] = df["date_of_visit"].dt.month
+
+    def _month_base_label(ts: pd.Timestamp) -> str:
+        month_name = ts.strftime("%B")
+        year_short = ts.strftime("%y")
+        return f"{month_name} '{year_short}"
+
+    df["month_base"] = df["date_of_visit"].apply(_month_base_label)
+
+    def _token_group(tok: str) -> str:
+        if tok in {"monthly", "weekly"}:
+            return "mw"
+        if tok == "random":
+            return "random"
+        return "other"
+
+    df["token_group"] = df["token_class"].apply(_token_group)
+
+    df = df.sort_values(["site_internal_id", "col_year", "col_month", "visit_dt"])
+
+    # Assign base vs extra per site+month
+    df["is_base"] = False
+    for (site, y, m), g in df.groupby(["site_internal_id", "col_year", "col_month"], sort=False):
+        g_mw = g[g["token_group"] == "mw"]
+        if len(g_mw) > 0:
+            base_idx = g_mw["visit_dt"].idxmin()
+        else:
+            g_rand = g[g["token_group"] == "random"]
+            base_idx = g_rand["visit_dt"].idxmin() if len(g_rand) > 0 else None
+        if base_idx is not None:
+            df.loc[base_idx, "is_base"] = True
+
+    df["tracker_column"] = df["month_base"] + df["is_base"].map(lambda b: "" if b else " Extra")
+
+    # Chronological order for merging
+    # (keep existing downstream logic; df already has col_year/col_month)
 
     # Chronological order for merging
     df["col_year"] = df["date_of_visit"].dt.year
     df["col_month"] = df["date_of_visit"].dt.month
-    df = df.sort_values(["site_internal_id", "date_of_visit"])
+    df = df.sort_values(["site_internal_id", "visit_dt"])
 
     # Build dynamic column list based on dates present
     date_groups = (
