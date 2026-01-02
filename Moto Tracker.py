@@ -88,6 +88,25 @@ def _idxmin_dt(series: pd.Series) -> int:
         return s.idxmin()
     return s.index[0]
 
+def _is_blank_rich(val) -> bool:
+    """Return True if a rich-cell placeholder is blank/NA (safe for lists)."""
+    if val is None:
+        return True
+    # Empty string or empty list
+    if val == "" or val == []:
+        return True
+    # Pandas may store NaN floats in DataFrames
+    if isinstance(val, float):
+        try:
+            return pd.isna(val)
+        except Exception:
+            return False
+    # pd.NA / NaT etc (but avoid applying to lists/dicts)
+    try:
+        return pd.isna(val) if not isinstance(val, (list, dict)) else (len(val) == 0)
+    except Exception:
+        return False
+
 # ---------------------------------------------------------
 # STREAMLIT FILE UPLOADER
 # ---------------------------------------------------------
@@ -256,27 +275,7 @@ if uploaded_file is not None:
         existing = out_text.loc[site, col]
         out_text.loc[site, col] = val if pd.isna(existing) or existing == "" else f"{existing}, {val}"
 
-    
-def _is_blank_rich(val) -> bool:
-    """Return True if a rich-cell placeholder is blank/NA (safe for lists)."""
-    if val is None:
-        return True
-    # Empty string or empty list
-    if val == "" or val == []:
-        return True
-    # Pandas may store NaN floats in DataFrames
-    if isinstance(val, float):
-        try:
-            return pd.isna(val)
-        except Exception:
-            return False
-    # pd.NA / NaT etc (but avoid applying to lists/dicts)
-    try:
-        return pd.isna(val) if not isinstance(val, (list, dict)) else (len(val) == 0)
-    except Exception:
-        return False
-
-# Fill N/A for past months (months before current calendar month)
+    # Fill N/A for past months (months before current calendar month)
     today = datetime.today()
     current_y = int(today.strftime("%y"))
     current_m = int(today.strftime("%m"))
