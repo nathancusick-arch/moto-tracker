@@ -335,14 +335,14 @@ if uploaded_file is not None:
                         seg_rgb = str(seg.get("rgb", "000000"))
                         rt.append(
                             TextBlock(
-                                InlineFont(name="Arial", size=10, color=Color(rgb=_argb(seg_rgb))),
+                                InlineFont(rFont="Arial", sz=10, color=Color(rgb=_argb(seg_rgb))),
                                 seg_text,
                             )
                         )
                         if k < len(rich_val) - 1:
                             rt.append(
                                 TextBlock(
-                                    InlineFont(name="Arial", size=10, color=Color(rgb=_argb("000000"))),
+                                    InlineFont(rFont="Arial", sz=10, color=Color(rgb=_argb("000000"))),
                                     ", ",
                                 )
                             )
