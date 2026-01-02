@@ -79,7 +79,7 @@ if uploaded_file is not None:
     df["token_class"] = df["tokens"].astype(str).str.strip().str.lower()
 
     # Decide which tracker column each visit goes into:
-    # - Base column contains exactly 1 visit per site+month: the earliest approved Monthly/Weekly audit
+    # - Base column contains exactly 1 visit per site+month: the earliest Monthly/Weekly audit
     # - All other approved Monthly/Weekly go to Extra
     # - Random audits go to Extra, EXCEPT if there are no Monthly/Weekly that month for that site (then earliest Random goes to base)
     df["col_year"] = df["date_of_visit"].dt.year
@@ -104,21 +104,46 @@ if uploaded_file is not None:
     df = df.sort_values(["site_internal_id", "col_year", "col_month", "visit_dt"])
 
     # Assign base vs extra per site+month
+    # Rule:
+    # - Base column contains exactly 1 audit per site+month:
+    #     - Prefer the earliest Monthly/Weekly audit that is NOT emergency.
+    #     - Emergency Monthly/Weekly audits go to Extra unless:
+    #         * it is the only Monthly/Weekly audit in that month, OR
+    #         * all Monthly/Weekly audits that month are emergency (then earliest emergency goes to base).
+    #     - If there are no Monthly/Weekly audits, the earliest Random goes to base (if any).
     df["is_base"] = False
-    for (site, y, m), g in df.groupby(["site_internal_id", "col_year", "col_month"], sort=False):
+
+    # Ensure order_schedule_type exists
+    if "order_schedule_type" not in df.columns:
+        df["order_schedule_type"] = ""
+
+    df["order_schedule_type_norm"] = df["order_schedule_type"].fillna("").astype(str).str.strip().str.lower()
+
+    for (site, y, mth), g in df.groupby(["site_internal_id", "col_year", "col_month"], sort=False):
+        base_idx = None
+
         g_mw = g[g["token_group"] == "mw"]
         if len(g_mw) > 0:
-            base_idx = g_mw["visit_dt"].idxmin()
+            if len(g_mw) == 1:
+                # Only one Monthly/Weekly audit: it becomes base even if emergency
+                base_idx = g_mw["visit_dt"].idxmin()
+            else:
+                # Multiple Monthly/Weekly audits: prefer earliest non-emergency
+                g_non_em = g_mw[g_mw["order_schedule_type_norm"] != "emergency"]
+                if len(g_non_em) > 0:
+                    base_idx = g_non_em["visit_dt"].idxmin()
+                else:
+                    # All Monthly/Weekly audits are emergency: earliest emergency becomes base
+                    base_idx = g_mw["visit_dt"].idxmin()
         else:
+            # No Monthly/Weekly audits: earliest Random becomes base (if any)
             g_rand = g[g["token_group"] == "random"]
             base_idx = g_rand["visit_dt"].idxmin() if len(g_rand) > 0 else None
+
         if base_idx is not None:
             df.loc[base_idx, "is_base"] = True
 
     df["tracker_column"] = df["month_base"] + df["is_base"].map(lambda b: "" if b else " Extra")
-
-    # Chronological order for merging
-    # (keep existing downstream logic; df already has col_year/col_month)
 
     # Chronological order for merging
     df["col_year"] = df["date_of_visit"].dt.year
