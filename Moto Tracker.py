@@ -44,12 +44,18 @@ def day_ordinal(ts: pd.Timestamp) -> str:
     return f"{d}{suffix}"
 
 
-def tracker_col_from_date(ts: pd.Timestamp, token_class: str) -> str:
-    """Map date + token into an exact tracker column label."""
+def _month_base_label(ts: pd.Timestamp) -> str:
     month_name = ts.strftime("%B")
     year_short = ts.strftime("%y")
-    base = f"{month_name} '{year_short}"
-    return base if token_class == "monthly" else base + " Extra"
+    return f"{month_name} '{year_short}"
+
+
+def _token_group(tok: str) -> str:
+    if tok in {"monthly", "weekly"}:
+        return "mw"
+    if tok == "random":
+        return "random"
+    return "other"
 
 
 # ---------------------------------------------------------
@@ -59,98 +65,132 @@ def tracker_col_from_date(ts: pd.Timestamp, token_class: str) -> str:
 uploaded_file = st.file_uploader("Upload audits_basic_data_export.csv", type=["csv"])
 
 if uploaded_file is not None:
-
     # Load CSV
     df = pd.read_csv(uploaded_file)
 
-    # Only include completed audits
+    # Keep everything except deleted
     df["status_norm"] = df.get("status").astype(str).str.strip().str.lower()
-    df = df[df["status_norm"] == "approved"].copy()
+    df = df[df["status_norm"] != "deleted"].copy()
 
-    # UK dd/mm/yyyy
-    df["date_of_visit"] = pd.to_datetime(df["date_of_visit"], dayfirst=True, errors="coerce")
-    df = df[df["date_of_visit"].notna()].copy()
+    # Approved vs non-approved
+    df["is_approved"] = df["status_norm"] == "approved"
 
-    # Parse time_of_visit for tie-breaks (missing times treated as 00:00:00)
+    # Parse dates (UK dd/mm/yyyy). Month assignment:
+    # - Approved: month from date_of_visit
+    # - Non-approved: month from start_date
+    df["date_of_visit_dt"] = pd.to_datetime(df.get("date_of_visit"), dayfirst=True, errors="coerce")
+    df["start_date_dt"] = pd.to_datetime(df.get("start_date"), dayfirst=True, errors="coerce")
+
+    df["month_dt"] = df["date_of_visit_dt"].where(df["is_approved"], df["start_date_dt"])
+    df = df[df["month_dt"].notna()].copy()
+
+    # Parse time_of_visit for approved tie-breaks (missing times treated as 00:00:00)
     df["time_of_visit_td"] = pd.to_timedelta(df.get("time_of_visit"), errors="coerce").fillna(pd.Timedelta(0))
-    df["visit_dt"] = df["date_of_visit"] + df["time_of_visit_td"]
+    df["visit_dt"] = df["date_of_visit_dt"] + df["time_of_visit_td"]
 
-    df["PRIMARY_RESULT"] = df["primary_result"].astype(str).str.upper()
-    df["token_class"] = df["tokens"].astype(str).str.strip().str.lower()
-
-    # Decide which tracker column each visit goes into:
-    # - Base column contains exactly 1 visit per site+month: the earliest Monthly/Weekly audit
-    # - All other approved Monthly/Weekly go to Extra
-    # - Random audits go to Extra, EXCEPT if there are no Monthly/Weekly that month for that site (then earliest Random goes to base)
-    df["col_year"] = df["date_of_visit"].dt.year
-    df["col_month"] = df["date_of_visit"].dt.month
-
-    def _month_base_label(ts: pd.Timestamp) -> str:
-        month_name = ts.strftime("%B")
-        year_short = ts.strftime("%y")
-        return f"{month_name} '{year_short}"
-
-    df["month_base"] = df["date_of_visit"].apply(_month_base_label)
-
-    def _token_group(tok: str) -> str:
-        if tok in {"monthly", "weekly"}:
-            return "mw"
-        if tok == "random":
-            return "random"
-        return "other"
-
+    # Normalized fields
+    df["PRIMARY_RESULT"] = df.get("primary_result").astype(str).str.upper()
+    df["token_class"] = df.get("tokens").astype(str).str.strip().str.lower()
     df["token_group"] = df["token_class"].apply(_token_group)
-
-    df = df.sort_values(["site_internal_id", "col_year", "col_month", "visit_dt"])
-
-    # Assign base vs extra per site+month
-    # Rule:
-    # - Base column contains exactly 1 audit per site+month:
-    #     - Prefer the earliest Monthly/Weekly audit that is NOT emergency.
-    #     - Emergency Monthly/Weekly audits go to Extra unless:
-    #         * it is the only Monthly/Weekly audit in that month, OR
-    #         * all Monthly/Weekly audits that month are emergency (then earliest emergency goes to base).
-    #     - If there are no Monthly/Weekly audits, the earliest Random goes to base (if any).
-    df["is_base"] = False
 
     # Ensure order_schedule_type exists
     if "order_schedule_type" not in df.columns:
         df["order_schedule_type"] = ""
-
     df["order_schedule_type_norm"] = df["order_schedule_type"].fillna("").astype(str).str.strip().str.lower()
+
+    # Grouping keys by month (based on month_dt)
+    df["col_year"] = df["month_dt"].dt.year
+    df["col_month"] = df["month_dt"].dt.month
+    df["month_base"] = df["month_dt"].apply(_month_base_label)
+
+    # Sort so "earliest" approved uses actual visit datetime; non-approved don't need strict chronology,
+    # but we still sort deterministically.
+    # Approved priority is enforced in the base-selection logic below.
+    df = df.sort_values(
+        ["site_internal_id", "col_year", "col_month", "is_approved", "visit_dt", "month_dt"],
+        ascending=[True, True, True, False, True, True],
+    )
+
+    # ---------------------------------------------------------
+    # Assign base vs extra per site+month
+    #
+    # Rules (as defined):
+    # - Base column contains exactly 1 audit per site+month.
+    # - Monthly/Weekly audits are preferred for base; approved takes priority over non-approved.
+    # - Emergency audits go to Extra unless it is the ONLY Monthly/Weekly audit that month
+    #   (or if multiple and all are emergency, earliest emergency becomes base).
+    # - Random audits go to Extra, EXCEPT if there are no Monthly/Weekly audits that month for that site
+    #   (then earliest Random goes to base). Approved Random takes priority over non-approved Random.
+    #
+    # - Cell text:
+    #   - Approved: "RESULT - 4TH"
+    #   - Non-approved: "TBC"
+    # ---------------------------------------------------------
+    df["is_base"] = False
+
+    def _idxmin_dt(series: pd.Series) -> int:
+        """Pick idx of earliest datetime, handling all-NaT."""
+        s = pd.to_datetime(series, errors="coerce")
+        if s.notna().any():
+            return s.idxmin()
+        # Fallback deterministic: first index
+        return s.index[0]
 
     for (site, y, mth), g in df.groupby(["site_internal_id", "col_year", "col_month"], sort=False):
         base_idx = None
 
         g_mw = g[g["token_group"] == "mw"]
-        if len(g_mw) > 0:
-            if len(g_mw) == 1:
-                # Only one Monthly/Weekly audit: it becomes base even if emergency
-                base_idx = g_mw["visit_dt"].idxmin()
+        g_mw_approved = g_mw[g_mw["is_approved"]]
+        g_mw_nonapproved = g_mw[~g_mw["is_approved"]]
+
+        # 1) Monthly/Weekly takes priority (approved preferred)
+        if len(g_mw_approved) > 0:
+            if len(g_mw_approved) == 1:
+                # Only one approved MW: becomes base even if emergency
+                base_idx = _idxmin_dt(g_mw_approved["visit_dt"])
             else:
-                # Multiple Monthly/Weekly audits: prefer earliest non-emergency
-                g_non_em = g_mw[g_mw["order_schedule_type_norm"] != "emergency"]
+                # Multiple approved MW: prefer earliest non-emergency
+                g_non_em = g_mw_approved[g_mw_approved["order_schedule_type_norm"] != "emergency"]
                 if len(g_non_em) > 0:
-                    base_idx = g_non_em["visit_dt"].idxmin()
+                    base_idx = _idxmin_dt(g_non_em["visit_dt"])
                 else:
-                    # All Monthly/Weekly audits are emergency: earliest emergency becomes base
-                    base_idx = g_mw["visit_dt"].idxmin()
+                    # All approved MW are emergency: earliest emergency becomes base
+                    base_idx = _idxmin_dt(g_mw_approved["visit_dt"])
+
+        elif len(g_mw_nonapproved) > 0:
+            # No approved MW: choose among non-approved MW (month_dt only; no time ordering required)
+            if len(g_mw_nonapproved) == 1:
+                base_idx = _idxmin_dt(g_mw_nonapproved["month_dt"])
+            else:
+                g_non_em = g_mw_nonapproved[g_mw_nonapproved["order_schedule_type_norm"] != "emergency"]
+                if len(g_non_em) > 0:
+                    base_idx = _idxmin_dt(g_non_em["month_dt"])
+                else:
+                    base_idx = _idxmin_dt(g_mw_nonapproved["month_dt"])
+
         else:
-            # No Monthly/Weekly audits: earliest Random becomes base (if any)
+            # 2) No Monthly/Weekly: earliest Random becomes base (approved preferred)
             g_rand = g[g["token_group"] == "random"]
-            base_idx = g_rand["visit_dt"].idxmin() if len(g_rand) > 0 else None
+            g_rand_approved = g_rand[g_rand["is_approved"]]
+            g_rand_nonapproved = g_rand[~g_rand["is_approved"]]
+
+            if len(g_rand_approved) > 0:
+                base_idx = _idxmin_dt(g_rand_approved["visit_dt"])
+            elif len(g_rand_nonapproved) > 0:
+                base_idx = _idxmin_dt(g_rand_nonapproved["month_dt"])
+            else:
+                base_idx = None
 
         if base_idx is not None:
             df.loc[base_idx, "is_base"] = True
 
     df["tracker_column"] = df["month_base"] + df["is_base"].map(lambda b: "" if b else " Extra")
 
-    # Chronological order for merging
-    df["col_year"] = df["date_of_visit"].dt.year
-    df["col_month"] = df["date_of_visit"].dt.month
-    df = df.sort_values(["site_internal_id", "visit_dt"])
+    # Chronological order for merging output strings (approved use visit_dt, non-approved use month_dt)
+    df["sort_dt"] = df["visit_dt"].where(df["is_approved"], df["month_dt"])
+    df = df.sort_values(["site_internal_id", "col_year", "col_month", "tracker_column", "sort_dt"])
 
-    # Build dynamic column list based on dates present
+    # Build dynamic column list based on months present (from month_dt)
     date_groups = (
         df[["col_year", "col_month"]]
         .drop_duplicates()
@@ -172,19 +212,28 @@ if uploaded_file is not None:
 
     # Fill table
     for _, row in df.iterrows():
-        site = str(row["site_internal_id"])
-        col = row["tracker_column"]
+        site = str(row.get("site_internal_id"))
+        col = row.get("tracker_column")
 
         if site not in out.index or col not in out.columns:
             continue
 
-        day_str = day_ordinal(row["date_of_visit"])
-        val = f"{row['PRIMARY_RESULT']} - {day_str}"
+        if bool(row.get("is_approved")):
+            # Approved: show result + visit day
+            if pd.isna(row.get("date_of_visit_dt")):
+                # Safety fallback (shouldn't happen for approved since month_dt came from date_of_visit_dt)
+                val = str(row.get("PRIMARY_RESULT", "")).strip() or "TBC"
+            else:
+                day_str = day_ordinal(row["date_of_visit_dt"])
+                val = f"{row['PRIMARY_RESULT']} - {day_str}"
+        else:
+            # Non-approved: always TBC
+            val = "TBC"
 
         existing = out.loc[site, col]
         out.loc[site, col] = val if pd.isna(existing) or existing == "" else f"{existing}, {val}"
 
-    # Fill N/A for past months
+    # Fill N/A for past months (months before current calendar month)
     today = datetime.today()
     current_y = int(today.strftime("%y"))
     current_m = int(today.strftime("%m"))
