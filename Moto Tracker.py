@@ -77,7 +77,6 @@ def _fallback_token_from_schedule_type(order_schedule_type_norm: str) -> str:
         return "weekly"
     return ""
 
-
 def _argb(rgb6: str) -> str:
     rgb6 = (rgb6 or "000000").replace("#", "").upper()
     if len(rgb6) != 6:
