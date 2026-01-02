@@ -4,6 +4,7 @@ import io
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles.colors import Color
+from openpyxl.styles import Alignment, Font
 
 # Rich text support
 try:
@@ -304,13 +305,19 @@ if uploaded_file is not None:
     ws.title = "Moto Tracker Results"
 
     # Header row
-    ws.cell(row=1, column=1, value="Site Code")
+    c0 = ws.cell(row=1, column=1, value="Site Code")
+    c0.font = Font(name="Arial", size=10)
+    c0.alignment = Alignment(vertical="center")
     for j, col in enumerate(out_text.columns, start=2):
-        ws.cell(row=1, column=j, value=col)
+        cj = ws.cell(row=1, column=j, value=col)
+        cj.font = Font(name="Arial", size=10)
+        cj.alignment = Alignment(vertical="center")
 
     # Data rows
     for i, site in enumerate(out_text.index, start=2):
-        ws.cell(row=i, column=1, value=site)
+        c_site = ws.cell(row=i, column=1, value=site)
+        c_site.font = Font(name="Arial", size=10)
+        c_site.alignment = Alignment(vertical="center")
 
         for j, col in enumerate(out_text.columns, start=2):
             cell = ws.cell(row=i, column=j)
@@ -318,19 +325,22 @@ if uploaded_file is not None:
 
             if rich_val == "N/A":
                 cell.value = "N/A"
+                cell.alignment = Alignment(vertical="center")
             elif isinstance(rich_val, list) and len(rich_val) > 0:
                 if RICH_TEXT_AVAILABLE:
                     rt = CellRichText()
                     for k, seg in enumerate(rich_val):
                         seg_text = str(seg.get("text", ""))
                         seg_rgb = str(seg.get("rgb", "000000"))
-                        rt.append(TextBlock(InlineFont(color=Color(rgb=_argb(seg_rgb))), seg_text))
+                        rt.append(TextBlock(InlineFont(name="Arial", size=10, color=Color(rgb=_argb(seg_rgb))), seg_text))
                         if k < len(rich_val) - 1:
-                            rt.append(TextBlock(InlineFont(color=Color(rgb=_argb("000000"))), ", "))
+                            rt.append(TextBlock(InlineFont(name="Arial", size=10, color=Color(rgb=_argb("000000"))), ", "))
                     cell.value = rt
+                cell.alignment = Alignment(vertical="center")
                 else:
                     # Fallback: no rich text support, write plain string
                     cell.value = ", ".join(str(seg.get("text", "")) for seg in rich_val)
+                cell.alignment = Alignment(vertical="center")
             else:
                 # leave blank
                 pass
