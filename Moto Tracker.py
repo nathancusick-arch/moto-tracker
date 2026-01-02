@@ -346,17 +346,17 @@ if uploaded_file is not None:
     # Header row
     c0 = ws.cell(row=1, column=1, value="Site Code")
     c0.font = Font(name="Arial", size=10)
-    c0.alignment = Alignment(horizontal="center")
+    c0.alignment = Alignment(horizontal="center", vertical="center")
     for j, col in enumerate(out_text.columns, start=2):
         cj = ws.cell(row=1, column=j, value=col)
         cj.font = Font(name="Arial", size=10)
-        cj.alignment = Alignment(horizontal="center")
+        cj.alignment = Alignment(horizontal="center", vertical="center")
 
     # Data rows
     for i, site in enumerate(out_text.index, start=2):
         c_site = ws.cell(row=i, column=1, value=site)
         c_site.font = Font(name="Arial", size=10)
-        c_site.alignment = Alignment(horizontal="center")
+        c_site.alignment = Alignment(horizontal="center", vertical="center")
 
         for j, col in enumerate(out_text.columns, start=2):
             cell = ws.cell(row=i, column=j)
@@ -364,7 +364,7 @@ if uploaded_file is not None:
 
             if rich_val == "N/A":
                 cell.value = "N/A"
-                cell.alignment = Alignment(horizontal="center")
+                cell.alignment = Alignment(horizontal="center", vertical="center")
                 cell.font = Font(name="Arial", size=10)
             elif isinstance(rich_val, list) and len(rich_val) > 0:
                 if RICH_TEXT_AVAILABLE:
@@ -391,54 +391,53 @@ if uploaded_file is not None:
                     cell.value = ", ".join(str(seg.get("text", "")) for seg in rich_val)
 
                 # Alignment applies regardless of rich-text support
-                cell.alignment = Alignment(horizontal="center")
+                cell.alignment = Alignment(horizontal="center", vertical="center")
                 # Font applies to non-rich-text cells
                 cell.font = Font(name="Arial", size=10)
 
             else:
                 # leave blank
-                cell.alignment = Alignment(horizontal="center")
+                cell.alignment = Alignment(horizontal="center", vertical="center")
                 cell.font = Font(name="Arial", size=10)
                 pass
-
-
-    # Apply an outline border around each month block (base + extra columns)
+    # Apply an outline border around each month block (base + extra columns),
+    # but ONLY around the data area (exclude the header row).
     # Month columns start at Excel column 2 (because col 1 is Site Code)
     first_month_col = 2
     n_cols = len(out_text.columns)
-    last_row = 1 + len(out_text.index)  # header + data rows
+    header_row = 1
+    first_data_row = 2
+    last_data_row = 1 + len(out_text.index)  # header + data rows
 
     # out_text.columns are [<month>, <month Extra>, <next month>, ...]
     for month_i in range(0, n_cols, 2):
         base_col = first_month_col + month_i
         extra_col = base_col + 1
 
-        for r in range(1, last_row + 1):
-            # Left edge on base column
+        # Left and right edges for data rows only
+        for r in range(first_data_row, last_data_row + 1):
             c_base = ws.cell(row=r, column=base_col)
             c_base.border = _with_border(c_base, left=MED_SIDE)
 
-            # Right edge on extra column
             c_extra = ws.cell(row=r, column=extra_col)
             c_extra.border = _with_border(c_extra, right=MED_SIDE)
 
-        # Top edge (header row) across both columns
+        # Top edge on the first data row (row 2)
         for c in (base_col, extra_col):
-            cell_top = ws.cell(row=1, column=c)
+            cell_top = ws.cell(row=first_data_row, column=c)
             cell_top.border = _with_border(cell_top, top=MED_SIDE)
 
-        # Bottom edge (last data row) across both columns
+        # Bottom edge on the last data row
         for c in (base_col, extra_col):
-            cell_bot = ws.cell(row=last_row, column=c)
+            cell_bot = ws.cell(row=last_data_row, column=c)
             cell_bot.border = _with_border(cell_bot, bottom=MED_SIDE)
 
-    # Also put a medium outline around the Site Code column to match the table boundary
-    for r in range(1, last_row + 1):
+    # Optional: keep a medium outline around the Site Code *data* column (exclude header row)
+    for r in range(first_data_row, last_data_row + 1):
         c_site = ws.cell(row=r, column=1)
         c_site.border = _with_border(c_site, left=MED_SIDE, right=MED_SIDE)
-    ws.cell(row=1, column=1).border = _with_border(ws.cell(row=1, column=1), top=MED_SIDE)
-    ws.cell(row=last_row, column=1).border = _with_border(ws.cell(row=last_row, column=1), bottom=MED_SIDE)
-
+    ws.cell(row=first_data_row, column=1).border = _with_border(ws.cell(row=first_data_row, column=1), top=MED_SIDE)
+    ws.cell(row=last_data_row, column=1).border = _with_border(ws.cell(row=last_data_row, column=1), bottom=MED_SIDE)
 
     xlsx_buffer = io.BytesIO()
     wb.save(xlsx_buffer)
